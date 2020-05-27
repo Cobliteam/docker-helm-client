@@ -4,34 +4,18 @@ definitions:
   release-tag: &release-tag /^[0-9]+\.[0-9]+\.[0-9]+$/
   image-name: &image-name cobli/helm-client
   helm-version-matrix: &helm-version-matrix
-    matrix:
-      parameters:
-        helm-version: 
-          - "3.2.1"
 
 workflows:
   build-and-publish-docker-image:
     jobs:
-      - docker/hadolint
+      - docker/hadolint:
+          dockerfiles: "Dockerfile,Dockerfile-ci"
       - build-and-push:
-          <<: *helm-version-matrix
-          push: false
-          filters:
-            branches:
-              ignore: /^master$/
-            tags:
-              ignore: *release-tag
-          requires:
-            - docker/hadolint
-      - build-and-push:
-          <<: *helm-version-matrix
           context: coblicd-dockerhub-login
-          push: true
-          filters:
-            branches:
-              only: /^master$/
-            tags:
-              only: *release-tag
+          matrix:
+            parameters:
+              helm-version: 
+                - "3.2.1"
           requires:
             - docker/hadolint
 
@@ -41,30 +25,42 @@ jobs:
     parameters:
       helm-version:
         type: string
-      push:
-        type: boolean
     steps:
       - checkout
       - run:
           name: Choose image tag
+          environment:
+            IMAGE_NAME: *image-name
           command: |-
             tag="<<parameters.helm-version>>"
             if [[ -n $CIRCLE_TAG ]]; then
               tag+="-$CIRCLE_TAG"
+            else 
+              tag+="-$CIRCLE_BRANCH"
             fi
             echo "export TAG=$tag" >> $BASH_ENV;
       - docker/build:
+          step-name: Build slim image
           image: *image-name
           cache_from: cobli/helm-client:<<parameters.helm-version>>
           extra_build_args: --build-arg HELM_VERSION=<<parameters.helm-version>>
           tag: "${TAG}"
-      - when:
-          condition: <<parameters.push>>
-          steps:
-            - docker/check
-            - docker/push:
-                image: *image-name
-                tag: "${TAG}"
+      - docker/build:
+          step-name: Build CI image
+          image: *image-name
+          cache_from: cobli/helm-client:<<parameters.helm-version>>
+          extra_build_args: --build-arg BASE_IMAGE_TAG=${TAG}
+          tag: "ci-${TAG}"
+          dockerfile: Dockerfile-ci
+      - docker/check
+      - docker/push:
+          step-name: Push slim image
+          image: *image-name
+          tag: "${TAG}"
+      - docker/push:
+          step-name: Push CI image
+          image: *image-name
+          tag: "ci-${TAG}"
 
 orbs:
   docker: circleci/docker@1.0.1
